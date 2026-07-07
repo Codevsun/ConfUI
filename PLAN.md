@@ -16,8 +16,8 @@ Work strictly top to bottom. One milestone per session.
       with Space, string/number inputs with validation), modified
       indicator, Ctrl+S save with .bak backup + atomic write.
 - [x] M5: Undo/redo — snapshot-based history, Ctrl+Z / Ctrl+Y.
-- [ ] M6: Structure editing — insert/delete/rename/duplicate/move keys
-      and array items, confirmation dialogs.
+- [x] M6: Structure editing — insert/delete/rename/duplicate/cut-paste
+      keys and array items, confirmation for delete.
 - [ ] M7: Search — `/` to search keys and values, highlight, n/N to jump.
 - [ ] M8: Validation — inline errors (port range, number formats, URL,
       IP), shown in the right panel, never crash on bad input.

@@ -46,6 +46,18 @@ pub struct App {
     pub edit_buffer: String,
     /// Cursor position (byte index) within the edit buffer.
     pub edit_cursor: usize,
+    /// Whether we're showing a delete confirmation.
+    pub confirming_delete: bool,
+    /// The path of the node pending delete confirmation.
+    pub confirm_delete_path: TreePath,
+    /// Whether we're in rename mode (for object keys).
+    pub renaming: bool,
+    /// The path of the node being renamed.
+    pub rename_path: TreePath,
+    /// The rename buffer content.
+    pub rename_buffer: String,
+    /// Clipboard for cut/paste operations.
+    pub clipboard: Option<(TreePath, Value)>,
 }
 
 impl App {
@@ -97,6 +109,12 @@ impl App {
             edit_path: TreePath::new(),
             edit_buffer: String::new(),
             edit_cursor: 0,
+            confirming_delete: false,
+            confirm_delete_path: TreePath::new(),
+            renaming: false,
+            rename_path: TreePath::new(),
+            rename_buffer: String::new(),
+            clipboard: None,
         })
     }
 
@@ -428,6 +446,280 @@ impl App {
         }
     }
 
+    // ── structure editing ──────────────────────────────────────────
+
+    /// Insert a new key (in objects) or item (in arrays) at the current cursor position.
+    pub fn insert_node(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            // Cannot insert at root
+            self.status = "Cannot insert at root".into();
+            return;
+        }
+        let parent_path: TreePath = cursor_path[..cursor_path.len() - 1].to_vec();
+
+        // Determine where to insert: we use the parent + append/insert logic
+        let parent = self.tree.get(&parent_path).cloned();
+        match parent {
+            Some(Value::Object(_)) => {
+                // Insert a new key in the object (same level as the cursor)
+                let new_key = "new_key";
+                let insert_path = {
+                    let mut p = parent_path.to_vec();
+                    p.push(PathSegment::Key(new_key.into()));
+                    p
+                };
+                self.history.record(self.tree.clone());
+                if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                    self.modified = true;
+                    // Expand the parent so the new key is visible
+                    if !self.expanded.contains(&parent_path) {
+                        self.expanded.push(parent_path.clone());
+                    }
+                    self.status = format!("Inserted '{}' — Ctrl+S save", new_key);
+                } else {
+                    self.status = "Could not insert new key".into();
+                }
+            }
+            Some(Value::Array(ref arr)) => {
+                // Insert at the end of the array
+                let insert_idx = arr.len();
+                let insert_path = {
+                    let mut p = parent_path.to_vec();
+                    p.push(PathSegment::Index(insert_idx));
+                    p
+                };
+                self.history.record(self.tree.clone());
+                if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                    self.modified = true;
+                    if !self.expanded.contains(&parent_path) {
+                        self.expanded.push(parent_path.clone());
+                    }
+                    self.status = format!("Inserted item [{}] — Ctrl+S save", insert_idx);
+                } else {
+                    self.status = "Could not insert array item".into();
+                }
+            }
+            Some(_) => {
+                // Cursor is on a leaf, parent is not a container
+                self.status = "Cannot insert: parent is not an object or array".into();
+            }
+            None => {
+                self.status = "Cannot insert: path not found".into();
+            }
+        }
+    }
+
+    /// Initiate delete confirmation for the current node.
+    pub fn delete_node(&mut self) {
+        if self.editing || self.renaming {
+            return;
+        }
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            self.status = "Cannot delete root".into();
+            return;
+        }
+        if self.confirming_delete {
+            // Second press: confirm
+            self.confirm_delete();
+        } else {
+            // First press: ask for confirmation
+            self.confirming_delete = true;
+            self.confirm_delete_path = cursor_path;
+            self.status = "Delete? Press d again to confirm, Esc to cancel".into();
+        }
+    }
+
+    /// Confirm and execute the pending delete.
+    fn confirm_delete(&mut self) {
+        let path = self.confirm_delete_path.clone();
+        self.confirming_delete = false;
+        self.history.record(self.tree.clone());
+        match self.tree.delete(&path) {
+            Ok(removed) => {
+                self.modified = true;
+                self.status = format!("Deleted {} — Ctrl+Z undo  Ctrl+S save", removed.type_name());
+            }
+            Err(e) => {
+                self.status = format!("Delete error: {}", e);
+            }
+        }
+    }
+
+    /// Cancel the pending delete confirmation.
+    pub fn cancel_delete(&mut self) {
+        if self.confirming_delete {
+            self.confirming_delete = false;
+            self.status = "Delete cancelled".into();
+        }
+    }
+
+    /// Start renaming the current key (only valid for object keys).
+    pub fn start_rename(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            self.status = "Cannot rename root".into();
+            return;
+        }
+        let last = cursor_path.last().unwrap();
+        match last {
+            PathSegment::Key(k) => {
+                self.renaming = true;
+                self.rename_path = cursor_path.clone();
+                self.rename_buffer = k.clone();
+                self.status = "Rename — Enter confirm  Esc cancel".into();
+            }
+            PathSegment::Index(_) => {
+                self.status = "Cannot rename array indices, use cut/paste to reorder".into();
+            }
+        }
+    }
+
+    /// Commit the current rename.
+    pub fn commit_rename(&mut self) {
+        if !self.renaming {
+            return;
+        }
+        let new_key = self.rename_buffer.trim().to_string();
+        if new_key.is_empty() {
+            self.status = "Key name cannot be empty".into();
+            return;
+        }
+        let path = self.rename_path.clone();
+        self.renaming = false;
+        self.history.record(self.tree.clone());
+        match self.tree.rename_key(&path, &new_key) {
+            Ok(()) => {
+                self.modified = true;
+                self.status = format!("Renamed to '{}' — Ctrl+Z undo", new_key);
+            }
+            Err(e) => {
+                self.status = format!("Rename error: {}", e);
+            }
+        }
+    }
+
+    /// Cancel rename mode.
+    pub fn cancel_rename(&mut self) {
+        if self.renaming {
+            self.renaming = false;
+            self.status = "Rename cancelled".into();
+        }
+    }
+
+    /// Duplicate the current node.
+    pub fn duplicate_node(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            self.status = "Cannot duplicate root".into();
+            return;
+        }
+        let value = match self.tree.get(&cursor_path) {
+            Some(v) => v.clone(),
+            None => {
+                self.status = "Cannot duplicate: path not found".into();
+                return;
+            }
+        };
+        let parent_path: TreePath = cursor_path[..cursor_path.len() - 1].to_vec();
+        let last = cursor_path.last().unwrap();
+
+        self.history.record(self.tree.clone());
+        let result = match last {
+            PathSegment::Key(k) => {
+                let new_key = format!("{}_copy", k);
+                let mut p = parent_path.clone();
+                p.push(PathSegment::Key(new_key.clone()));
+                self.tree.insert(&p, value).map(|_| new_key)
+            }
+            PathSegment::Index(i) => {
+                let mut p = parent_path.clone();
+                p.push(PathSegment::Index(*i + 1));
+                self.tree.insert(&p, value).map(|_| format!("[{}]", i + 1))
+            }
+        };
+        match result {
+            Ok(label) => {
+                self.modified = true;
+                self.status = format!("Duplicated as {} — Ctrl+Z undo", label);
+            }
+            Err(e) => {
+                self.status = format!("Duplicate error: {}", e);
+            }
+        }
+    }
+
+    /// Cut the current node (copy to clipboard and delete).
+    pub fn cut_node(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            self.status = "Cannot cut root".into();
+            return;
+        }
+        let value = match self.tree.get(&cursor_path) {
+            Some(v) => v.clone(),
+            None => {
+                self.status = "Cannot cut: path not found".into();
+                return;
+            }
+        };
+        self.history.record(self.tree.clone());
+        match self.tree.delete(&cursor_path) {
+            Ok(_) => {
+                self.clipboard = Some((cursor_path, value));
+                self.modified = true;
+                self.status = "Cut — navigate to target and press Ctrl+P to paste".into();
+            }
+            Err(e) => {
+                self.status = format!("Cut error: {}", e);
+            }
+        }
+    }
+
+    /// Paste a previously cut node at the current cursor position.
+    pub fn paste_node(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        let (from_path, _value) = match &self.clipboard {
+            Some(pair) => pair,
+            None => {
+                self.status = "Nothing to paste — use Ctrl+X to cut first".into();
+                return;
+            }
+        };
+        let cursor_path = self.cursor_path();
+        if cursor_path.is_empty() {
+            self.status = "Cannot paste at root".into();
+            return;
+        }
+        self.history.record(self.tree.clone());
+        let result = self.tree.move_value(from_path, &cursor_path);
+        match result {
+            Ok(()) => {
+                self.clipboard = None;
+                self.modified = true;
+                self.status = "Moved — Ctrl+Z undo".into();
+            }
+            Err(e) => {
+                self.status = format!("Paste error: {}", e);
+            }
+        }
+    }
+
     // ── undo / redo ────────────────────────────────────────────────
 
     /// Undo the last mutation.
@@ -626,6 +918,35 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         }
+    } else if app.renaming {
+        // ── rename mode key handling ──────────────────────────────
+        match key.code {
+            KeyCode::Enter => {
+                app.commit_rename();
+            }
+            KeyCode::Esc => {
+                app.cancel_rename();
+            }
+            KeyCode::Backspace => {
+                if !app.rename_buffer.is_empty() {
+                    app.rename_buffer.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                app.rename_buffer.push(c);
+            }
+            _ => {}
+        }
+    } else if app.confirming_delete {
+        // ── confirm delete key handling ───────────────────────────
+        match key.code {
+            KeyCode::Char('d') | KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                app.confirm_delete();
+            }
+            _ => {
+                app.cancel_delete();
+            }
+        }
     } else {
         // ── normal mode key handling ─────────────────────────────
         match key.code {
@@ -689,6 +1010,25 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             KeyCode::Char('y') if key.modifiers == KeyModifiers::CONTROL => {
                 app.redo();
             }
+            // ── structure editing keybindings ─────────────────────
+            KeyCode::Char('i') => {
+                app.insert_node();
+            }
+            KeyCode::Char('d') => {
+                app.delete_node();
+            }
+            KeyCode::Char('R') => {
+                app.start_rename();
+            }
+            KeyCode::Char('D') => {
+                app.duplicate_node();
+            }
+            KeyCode::Char('x') if key.modifiers == KeyModifiers::CONTROL => {
+                app.cut_node();
+            }
+            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                app.paste_node();
+            }
             _ => {}
         }
     }
@@ -747,6 +1087,12 @@ mod tests {
             edit_path: TreePath::new(),
             edit_buffer: String::new(),
             edit_cursor: 0,
+            confirming_delete: false,
+            confirm_delete_path: TreePath::new(),
+            renaming: false,
+            rename_path: TreePath::new(),
+            rename_buffer: String::new(),
+            clipboard: None,
         }
     }
 
