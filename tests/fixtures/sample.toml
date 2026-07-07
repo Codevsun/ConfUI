@@ -37,7 +37,3 @@ endpoints = ["users", "posts", "comments", "tags"]
 primary_color = "#3366FF"
 dark_mode = true
 font_size = 14
-
-[null_values]
-description = null
-alternative = null

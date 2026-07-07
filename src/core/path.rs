@@ -39,9 +39,7 @@ pub type Path = Vec<PathSegment>;
 /// Convenience macros for building paths inline.
 ///
 /// ```
-/// use confui::core::path;
-///
-/// let p = path!["server", "port"];
+/// let p = confui::path!["server", "port"];
 /// assert_eq!(p.len(), 2);
 /// ```
 #[macro_export]
