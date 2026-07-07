@@ -58,6 +58,14 @@ pub struct App {
     pub rename_buffer: String,
     /// Clipboard for cut/paste operations.
     pub clipboard: Option<(TreePath, Value)>,
+    /// Whether we are in search input mode.
+    pub searching: bool,
+    /// The current search query.
+    pub search_query: String,
+    /// Paths of nodes matching the current search query.
+    pub search_results: Vec<TreePath>,
+    /// Index into search_results for the current match.
+    pub search_index: usize,
 }
 
 impl App {
@@ -115,6 +123,10 @@ impl App {
             rename_path: TreePath::new(),
             rename_buffer: String::new(),
             clipboard: None,
+            searching: false,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_index: 0,
         })
     }
 
@@ -720,11 +732,137 @@ impl App {
         }
     }
 
+    // ── search ─────────────────────────────────────────────────────
+
+    /// Start search mode: open the search query input.
+    pub fn start_search(&mut self) {
+        if self.editing || self.renaming || self.confirming_delete {
+            return;
+        }
+        self.searching = true;
+        self.search_query.clear();
+        self.search_results.clear();
+        self.search_index = 0;
+        self.status = "/ — type query, Enter to search, n/N next/prev, Esc cancel".into();
+    }
+
+    /// Update the search query and re-run the search.
+    fn run_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_results.clear();
+            self.search_index = 0;
+            return;
+        }
+        let query = self.search_query.to_lowercase();
+        let mut results = Vec::new();
+        search_tree(&self.tree, &TreePath::new(), &query, &mut results);
+        self.search_results = results;
+        self.search_index = 0;
+    }
+
+    /// Commit the search and jump to the first match.
+    pub fn commit_search(&mut self) {
+        if !self.searching {
+            return;
+        }
+        self.searching = false;
+        self.run_search();
+        if self.search_results.is_empty() {
+            self.status = "No matches found".into();
+        } else {
+            self.search_index = 0;
+            self.jump_to_search_match();
+            let total = self.search_results.len();
+            self.status = format!(
+                "Search: {} match{} — n next, N prev, / new search",
+                total,
+                if total == 1 { "" } else { "es" }
+            );
+        }
+    }
+
+    /// Cancel search mode.
+    pub fn cancel_search(&mut self) {
+        if self.searching {
+            self.searching = false;
+            self.search_query.clear();
+            self.search_results.clear();
+            self.search_index = 0;
+            self.status = "Search cancelled".into();
+        }
+    }
+
+    /// Jump to the next search match.
+    pub fn search_next(&mut self) {
+        if self.search_results.is_empty() {
+            self.status = "No active search — press / to search".into();
+            return;
+        }
+        self.search_index = (self.search_index + 1) % self.search_results.len();
+        self.jump_to_search_match();
+        self.status = format!(
+            "Match {}/{} — n next, N prev",
+            self.search_index + 1,
+            self.search_results.len()
+        );
+    }
+
+    /// Jump to the previous search match.
+    pub fn search_prev(&mut self) {
+        if self.search_results.is_empty() {
+            self.status = "No active search — press / to search".into();
+            return;
+        }
+        self.search_index = if self.search_index == 0 {
+            self.search_results.len() - 1
+        } else {
+            self.search_index - 1
+        };
+        self.jump_to_search_match();
+        self.status = format!(
+            "Match {}/{} — n next, N prev",
+            self.search_index + 1,
+            self.search_results.len()
+        );
+    }
+
+    /// Navigate to the current search match (expand its path and set cursor).
+    fn jump_to_search_match(&mut self) {
+        let target_path = match self.search_results.get(self.search_index) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        // Expand all ancestors so the target is visible
+        let mut ancestors = Vec::new();
+        for i in 0..target_path.len() {
+            let ancestor: TreePath = target_path[..i].to_vec();
+            if !self.expanded.contains(&ancestor) {
+                ancestors.push(ancestor);
+            }
+        }
+        self.expanded.extend(ancestors);
+        if !self.expanded.contains(&target_path)
+            && !target_path.is_empty()
+            && let Some(val) = self.tree.get(&target_path)
+            && !val.is_leaf()
+        {
+            self.expanded.push(target_path.clone());
+        }
+
+        // Find the target in visible lines and set cursor
+        let lines = self.compute_visible_lines();
+        if let Some(idx) = lines.iter().position(|l| l.path == target_path) {
+            self.cursor_index = idx;
+            self.ensure_cursor_visible(&lines);
+        }
+    }
+
     // ── undo / redo ────────────────────────────────────────────────
 
     /// Undo the last mutation.
     pub fn undo(&mut self) {
-        if self.editing {
+        if self.editing || self.searching {
             return;
         }
         let current = std::mem::replace(&mut self.tree, Value::Null);
@@ -840,6 +978,53 @@ fn collect_all_paths(value: &Value, parent: &TreePath, paths: &mut Vec<TreePath>
     }
 }
 
+/// Recursively search the tree for keys/values matching the given lowercase query.
+fn search_tree(value: &Value, parent: &TreePath, query: &str, results: &mut Vec<TreePath>) {
+    match value {
+        Value::Object(map) => {
+            for (key, val) in map.iter() {
+                let mut p = parent.clone();
+                p.push(PathSegment::Key(key.clone()));
+                if key.to_lowercase().contains(query) {
+                    results.push(p.clone());
+                }
+                if let Some(text) = value_to_search_text(val)
+                    && text.to_lowercase().contains(query)
+                    && !results.contains(&p)
+                {
+                    results.push(p.clone());
+                }
+                search_tree(val, &p, query, results);
+            }
+        }
+        Value::Array(arr) => {
+            for (i, val) in arr.iter().enumerate() {
+                let mut p = parent.clone();
+                p.push(PathSegment::Index(i));
+                if let Some(text) = value_to_search_text(val)
+                    && text.to_lowercase().contains(query)
+                {
+                    results.push(p.clone());
+                }
+                search_tree(val, &p, query, results);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Get a text representation of a value for search purposes.
+fn value_to_search_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Int(i) => Some(i.to_string()),
+        Value::Float(f) => Some(f.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null => Some("null".into()),
+        Value::Object(_) | Value::Array(_) => None,
+    }
+}
+
 /// Format name for display.
 fn format_name(format: Format) -> &'static str {
     match format {
@@ -947,6 +1132,27 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                 app.cancel_delete();
             }
         }
+    } else if app.searching {
+        // ── search mode key handling ─────────────────────────────
+        match key.code {
+            KeyCode::Enter => {
+                app.commit_search();
+            }
+            KeyCode::Esc => {
+                app.cancel_search();
+            }
+            KeyCode::Backspace => {
+                if !app.search_query.is_empty() {
+                    app.search_query.pop();
+                    app.run_search();
+                }
+            }
+            KeyCode::Char(c) => {
+                app.search_query.push(c);
+                app.run_search();
+            }
+            _ => {}
+        }
     } else {
         // ── normal mode key handling ─────────────────────────────
         match key.code {
@@ -1009,6 +1215,16 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Char('y') if key.modifiers == KeyModifiers::CONTROL => {
                 app.redo();
+            }
+            // ── search keybindings ───────────────────────────────
+            KeyCode::Char('/') => {
+                app.start_search();
+            }
+            KeyCode::Char('n') => {
+                app.search_next();
+            }
+            KeyCode::Char('N') => {
+                app.search_prev();
             }
             // ── structure editing keybindings ─────────────────────
             KeyCode::Char('i') => {
@@ -1093,6 +1309,10 @@ mod tests {
             rename_path: TreePath::new(),
             rename_buffer: String::new(),
             clipboard: None,
+            searching: false,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_index: 0,
         }
     }
 
