@@ -19,8 +19,8 @@ Work strictly top to bottom. One milestone per session.
 - [x] M6: Structure editing — insert/delete/rename/duplicate/cut-paste
       keys and array items, confirmation for delete.
 - [x] M7: Search — `/` to search keys and values, n/N to jump between matches.
-- [ ] M8: Validation — inline errors (port range, number formats, URL,
-      IP), shown in the right panel, never crash on bad input.
+- [x] M8: Validation — inline errors (port range, number bounds, URL, IP),
+      shown in the property panel, never crash on bad input.
 - [ ] M9: Themes — dark/light + Catppuccin/Nord/Tokyo Night/Gruvbox,
       custom themes from TOML.
 - [ ] M10: Plugin API — trait-based plugin system providing docs,

@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::validation;
 use crate::widgets::format_value_detailed;
 
 /// Initialize the terminal for ratatui.
@@ -324,6 +325,29 @@ fn render_property_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
             let detailed = format_value_detailed(value);
             for line in detailed.lines() {
                 lines.push(Line::from(Span::raw(line.to_string())));
+            }
+        }
+
+        // ── validation messages ──────────────────────────────────
+        let validations = validation::validate_value(&cursor_path, value);
+        if !validations.is_empty() {
+            lines.push(Line::from(Span::raw("")));
+            lines.push(Line::from(Span::styled(
+                "Validation:",
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            )));
+            for msg in &validations {
+                let (prefix, color) = match msg.severity {
+                    validation::Severity::Error => ("✗", Color::LightRed),
+                    validation::Severity::Warning => ("⚠", Color::Yellow),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} ", prefix),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(msg.message.clone(), Style::default().fg(color)),
+                ]));
             }
         }
     } else {
