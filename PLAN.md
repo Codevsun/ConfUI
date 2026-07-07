@@ -2,7 +2,7 @@
 Work strictly top to bottom. One milestone per session.
 
 - [x] M0: Scaffolding — cargo project, deps, module stubs, fixtures
-- [ ] M1: Core model — Value enum (Object/Array/String/Int/Float/Bool/Null),
+- [x] M1: Core model — Value enum (Object/Array/String/Int/Float/Bool/Null),
       Path type, tree operations (get/set/insert/delete/rename/move),
       full unit tests. No I/O, no UI.
 - [ ] M2: Parsers — format detection (extension + content fallback),

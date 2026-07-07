@@ -303,6 +303,7 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "directories",
+ "indexmap",
  "ratatui",
  "serde",
  "serde_json",
