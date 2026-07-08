@@ -21,7 +21,7 @@ Work strictly top to bottom. One milestone per session.
 - [x] M7: Search — `/` to search keys and values, n/N to jump between matches.
 - [x] M8: Validation — inline errors (port range, number bounds, URL, IP),
       shown in the property panel, never crash on bad input.
-- [ ] M9: Themes — dark/light + Catppuccin/Nord/Tokyo Night/Gruvbox,
-      custom themes from TOML.
+- [x] M9: Themes — dark/light + Catppuccin/Nord/Tokyo Night/Gruvbox,
+      custom themes from TOML, Ctrl+T to cycle.
 - [ ] M10: Plugin API — trait-based plugin system providing docs,
       validation, defaults; ship one example plugin (Cargo.toml).

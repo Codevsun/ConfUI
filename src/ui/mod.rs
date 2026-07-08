@@ -13,6 +13,11 @@ use crate::app::App;
 use crate::validation;
 use crate::widgets::format_value_detailed;
 
+/// Convenience: create a ratatui `Color::Rgb` from a theme tuple.
+fn tc(t: (u8, u8, u8)) -> Color {
+    Color::Rgb(t.0, t.1, t.2)
+}
+
 /// Initialize the terminal for ratatui.
 pub fn init_terminal()
 -> color_eyre::Result<ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>> {
@@ -93,19 +98,24 @@ fn render_top_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Span::styled(
             " ConfUI ",
             Style::default()
-                .fg(Color::White)
-                .bg(Color::Blue)
+                .fg(tc(app.theme.accent_fg))
+                .bg(tc(app.theme.accent_bg))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             file_name.as_ref(),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tc(app.theme.top_bar_fg))
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!("  [{format_str}]{modified_indicator}")),
+        Span::styled(
+            format!("  [{format_str}]{modified_indicator}"),
+            Style::default().fg(tc(app.theme.top_bar_fg)),
+        ),
     ]);
 
-    let block = Block::default().style(Style::default().bg(Color::DarkGray));
+    let block = Block::default().style(Style::default().bg(tc(app.theme.top_bar_bg)));
     Paragraph::new(text)
         .block(block)
         .render(area, frame.buffer_mut());
@@ -130,24 +140,25 @@ fn render_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 "▸ "
             };
 
+            let t = app.theme;
             let key_style = if idx == app.cursor_index {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
+                    .fg(tc(t.cursor_fg))
+                    .bg(tc(t.cursor_bg))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(tc(t.tree_key))
             };
 
             let value_style = if idx == app.cursor_index {
-                Style::default().fg(Color::Black).bg(Color::Yellow)
+                Style::default().fg(tc(t.cursor_fg)).bg(tc(t.cursor_bg))
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(tc(t.tree_value))
             };
 
             let content = Line::from(vec![
                 Span::raw(indent),
-                Span::styled(icon, Style::default().fg(Color::Yellow)),
+                Span::styled(icon, Style::default().fg(tc(t.tree_icon))),
                 Span::styled(line.key.clone(), key_style),
                 Span::raw(" "),
                 Span::styled(&line.value_summary, value_style),
@@ -165,8 +176,8 @@ fn render_sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut state = ListState::default().with_selected(Some(app.cursor_index));
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(Color::Yellow)
-            .fg(Color::Black)
+            .bg(tc(app.theme.highlight_bg))
+            .fg(tc(app.theme.highlight_fg))
             .add_modifier(Modifier::BOLD),
     );
 
@@ -187,7 +198,7 @@ fn render_property_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
         "Path:",
         Style::default()
             .add_modifier(Modifier::BOLD)
-            .fg(Color::Blue),
+            .fg(tc(app.theme.panel_header)),
     )));
 
     let path_str = if cursor_path.is_empty() {
@@ -227,7 +238,7 @@ fn render_property_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 "Type:",
                 Style::default()
                     .add_modifier(Modifier::BOLD)
-                    .fg(Color::Blue),
+                    .fg(tc(app.theme.panel_header)),
             )));
             lines.push(Line::from(Span::raw(value.type_name())));
             lines.push(Line::from(Span::raw("")));
@@ -237,7 +248,7 @@ fn render_property_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "Edit Value:",
             Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(Color::Green),
+                .fg(tc(app.theme.panel_header)),
         )));
 
         // Render buffer with cursor
@@ -353,7 +364,7 @@ fn render_property_panel(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         lines.push(Line::from(Span::styled(
             "(nothing selected)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(tc(app.theme.panel_text)),
         )));
     }
 
@@ -376,17 +387,21 @@ fn render_status_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (
             Line::from(vec![Span::styled(
                 &app.status,
-                Style::default().fg(Color::Black).bg(Color::LightGreen),
+                Style::default()
+                    .fg(tc(app.theme.edit_cursor))
+                    .bg(tc(app.theme.edit_status_bg)),
             )]),
-            Color::LightGreen,
+            tc(app.theme.edit_status_bg),
         )
     } else {
         (
             Line::from(vec![Span::styled(
                 &app.status,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
+                Style::default()
+                    .fg(tc(app.theme.status_fg))
+                    .bg(tc(app.theme.status_bg)),
             )]),
-            Color::DarkGray,
+            tc(app.theme.status_bg),
         )
     };
 

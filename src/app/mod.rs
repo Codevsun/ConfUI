@@ -7,6 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use crate::history::History;
+use crate::theme::{self, Theme};
 use crate::widgets::visible_lines;
 use confui::core::{Path as TreePath, PathSegment, Value};
 use confui::parser::{self, Format};
@@ -58,6 +59,10 @@ pub struct App {
     pub rename_buffer: String,
     /// Clipboard for cut/paste operations.
     pub clipboard: Option<(TreePath, Value)>,
+    /// The current theme index into PRESETS.
+    pub theme_index: usize,
+    /// The current theme.
+    pub theme: &'static Theme,
     /// Whether we are in search input mode.
     pub searching: bool,
     /// The current search query.
@@ -127,6 +132,8 @@ impl App {
             search_query: String::new(),
             search_results: Vec::new(),
             search_index: 0,
+            theme_index: 0,
+            theme: &theme::DARK,
         })
     }
 
@@ -732,6 +739,15 @@ impl App {
         }
     }
 
+    // ── theme cycling ────────────────────────────────────────────────
+
+    /// Cycle to the next theme preset.
+    pub fn cycle_theme(&mut self) {
+        self.theme_index = (self.theme_index + 1) % theme::PRESETS.len();
+        self.theme = theme::PRESETS[self.theme_index];
+        self.status = format!("Theme: {} — Ctrl+T to cycle", self.theme.name);
+    }
+
     // ── search ─────────────────────────────────────────────────────
 
     /// Start search mode: open the search query input.
@@ -1245,6 +1261,9 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
                 app.paste_node();
             }
+            KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
+                app.cycle_theme();
+            }
             _ => {}
         }
     }
@@ -1313,6 +1332,8 @@ mod tests {
             search_query: String::new(),
             search_results: Vec::new(),
             search_index: 0,
+            theme_index: 0,
+            theme: &theme::DARK,
         }
     }
 
