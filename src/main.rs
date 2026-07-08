@@ -8,6 +8,7 @@ use color_eyre::Result;
 
 mod app;
 mod history;
+mod plugins;
 mod theme;
 mod ui;
 mod validation;

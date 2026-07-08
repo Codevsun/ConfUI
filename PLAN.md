@@ -23,5 +23,5 @@ Work strictly top to bottom. One milestone per session.
       shown in the property panel, never crash on bad input.
 - [x] M9: Themes — dark/light + Catppuccin/Nord/Tokyo Night/Gruvbox,
       custom themes from TOML, Ctrl+T to cycle.
-- [ ] M10: Plugin API — trait-based plugin system providing docs,
-      validation, defaults; ship one example plugin (Cargo.toml).
+- [x] M10: Plugin API — trait-based plugin system with docs, validation,
+      defaults; example Cargo.toml plugin with key documentation.

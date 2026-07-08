@@ -7,6 +7,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use crate::history::History;
+use crate::plugins::PluginRegistry;
+use crate::plugins::cargo_toml::CargoTomlPlugin;
 use crate::theme::{self, Theme};
 use crate::widgets::visible_lines;
 use confui::core::{Path as TreePath, PathSegment, Value};
@@ -63,6 +65,10 @@ pub struct App {
     pub theme_index: usize,
     /// The current theme.
     pub theme: &'static Theme,
+    /// Plugin registry.
+    pub plugins: PluginRegistry,
+    /// The currently active plugin for the open file.
+    pub active_plugin: Option<String>,
     /// Whether we are in search input mode.
     pub searching: bool,
     /// The current search query.
@@ -106,6 +112,18 @@ impl App {
 
         let history = History::new(tree.clone());
 
+        let file_name = file_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Set up plugins
+        let mut plugins = PluginRegistry::new();
+        plugins.register(Box::new(CargoTomlPlugin));
+        let active_plugin = plugins
+            .find_for_file(&file_name)
+            .map(|p| p.name().to_string());
+
         Ok(Self {
             tree,
             file_path: file_path.to_path_buf(),
@@ -134,6 +152,8 @@ impl App {
             search_index: 0,
             theme_index: 0,
             theme: &theme::DARK,
+            plugins,
+            active_plugin,
         })
     }
 
@@ -1334,6 +1354,8 @@ mod tests {
             search_index: 0,
             theme_index: 0,
             theme: &theme::DARK,
+            plugins: PluginRegistry::new(),
+            active_plugin: None,
         }
     }
 
