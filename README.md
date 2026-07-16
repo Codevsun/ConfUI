@@ -1,6 +1,15 @@
+<div align="center">
+
 # ConfUI
 
 **Browse and edit config files (TOML, JSON, YAML) as an interactive tree — right in your terminal.**
+
+[![CI](https://img.shields.io/github/actions/workflow/status/Codevsun/ConfUI/release.yml?label=CI)](https://github.com/Codevsun/ConfUI/actions/workflows/release.yml)
+[![Crates.io](https://img.shields.io/crates/v/confui.svg)](https://crates.io/crates/confui)
+[![Release](https://img.shields.io/github/v/release/Codevsun/ConfUI?include_prereleases)](https://github.com/Codevsun/ConfUI/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
 
 ```
 ▾ root  (6 keys)
@@ -16,17 +25,47 @@
 
 Think of it like a file explorer for configs. No more scrolling through raw text — navigate, search, and edit with keyboard shortcuts.
 
+```bash
+curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
+```
+
+## Table of contents
+
+- [Install](#install)
+- [Usage](#usage)
+- [Keybindings](#keybindings)
+- [Features at a glance](#features-at-a-glance)
+- [Custom themes](#custom-themes)
+- [Plugin API](#plugin-api)
+- [Architecture](#architecture-for-contributors)
+- [Development](#development)
+- [License](#license)
+
 ---
 
 ## Install
 
-### Quick (from crates.io)
+### Quick (prebuilt binary)
+
+```bash
+curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.ps1 | iex
+```
+
+No Rust toolchain required — this downloads a prebuilt binary for your platform.
+
+### From crates.io
 
 ```bash
 cargo install confui
 ```
 
-### Or from source
+### From source
 
 ```bash
 git clone https://github.com/Codevsun/ConfUI.git
@@ -34,11 +73,7 @@ cd confui
 cargo install --path .
 ```
 
-Either way the `confui` binary is placed in your `~/.cargo/bin/` — make sure that directory is on your `PATH`.
-
-### Requirements
-
-- Rust 1.85+. Install from [rustup.rs](https://rustup.rs) if needed.
+The `cargo install` paths place the `confui` binary in `~/.cargo/bin/` — make sure that directory is on your `PATH`. (Rust 1.85+, via [rustup.rs](https://rustup.rs), if building from source.)
 
 ---
 
@@ -170,6 +205,25 @@ highlight_fg = "#002b36"
 
 ---
 
+## Plugin API
+
+Implement the `Plugin` trait to add docs, validation, or defaults for your own config files:
+
+```rust
+pub trait Plugin: Debug {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn matches_file(&self, file_name: &str) -> bool;
+    fn docs_for(&self, path: &Path) -> Option<String>;
+    fn validate(&self, path: &Path, value: &Value) -> Vec<ValidationMessage>;
+    fn defaults(&self) -> Option<Value> { None }
+}
+```
+
+See [`src/plugins/cargo_toml.rs`](src/plugins/cargo_toml.rs) for a complete example.
+
+---
+
 ## Architecture (for contributors)
 
 ```
@@ -177,14 +231,14 @@ src/
 ├── main.rs              # CLI entrypoint, terminal setup
 ├── lib.rs               # Exports core + parser
 ├── core/                # Value tree model — no I/O, no UI
-├── parser/              # All parsing/serialization (one file per format)
-├── app/mod.rs           # App state + event loop + keyboard handling
-├── ui/mod.rs            # Ratatui layout and rendering
-├── widgets/mod.rs       # Visible line computation, value formatting
-├── history/mod.rs       # Undo/redo (snapshot-based, 100 steps)
-├── validation/mod.rs    # Inline validation (ports, URLs, IPs, etc.)
-├── theme/mod.rs         # Theme definition, 6 presets, TOML loading
-└── plugins/             # Plugin trait + built-in Cargo.toml plugin
+├── parser/               # All parsing/serialization (one file per format)
+├── app/mod.rs            # App state + event loop + keyboard handling
+├── ui/mod.rs             # Ratatui layout and rendering
+├── widgets/mod.rs        # Visible line computation, value formatting
+├── history/mod.rs        # Undo/redo (snapshot-based, 100 steps)
+├── validation/mod.rs     # Inline validation (ports, URLs, IPs, etc.)
+├── theme/mod.rs          # Theme definition, 6 presets, TOML loading
+└── plugins/              # Plugin trait + built-in Cargo.toml plugin
     ├── mod.rs
     └── cargo_toml.rs
 ```
@@ -205,27 +259,10 @@ cargo fmt --check               # Check formatting
 cargo clippy --all-targets -- -D warnings  # Lint
 ```
 
----
-
-## Plugin API
-
-Implement the `Plugin` trait to add docs, validation, or defaults for your own config files:
-
-```rust
-pub trait Plugin: Debug {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn matches_file(&self, file_name: &str) -> bool;
-    fn docs_for(&self, path: &Path) -> Option<String>;
-    fn validate(&self, path: &Path, value: &Value) -> Vec<ValidationMessage>;
-    fn defaults(&self) -> Option<Value> { None }
-}
-```
-
-See [`src/plugins/cargo_toml.rs`](src/plugins/cargo_toml.rs) for a complete example.
+Contributions welcome — open an issue or PR on [GitHub](https://github.com/Codevsun/ConfUI).
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
