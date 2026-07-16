@@ -4,11 +4,6 @@
 
 **Browse and edit config files (TOML, JSON, YAML) as an interactive tree — right in your terminal.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/Codevsun/ConfUI/release.yml?label=CI)](https://github.com/Codevsun/ConfUI/actions/workflows/release.yml)
-[![Crates.io](https://img.shields.io/crates/v/confui.svg)](https://crates.io/crates/confui)
-[![Release](https://img.shields.io/github/v/release/Codevsun/ConfUI?include_prereleases)](https://github.com/Codevsun/ConfUI/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
 </div>
 
 ```
