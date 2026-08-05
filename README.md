@@ -69,6 +69,17 @@ This places the `confui` binary in `~/.cargo/bin/` — make sure that directory 
 > **Note:** this project isn't published on crates.io yet, so `cargo install confui`
 > isn't available — use the prebuilt-binary installer or build from source above.
 
+### Updating
+
+The prebuilt-binary install also places a `confui-update` binary next to `confui`.
+Run it any time to check for and install the latest release:
+
+```bash
+confui-update
+```
+
+(If you built from source, just `git pull && cargo install --path .` again.)
+
 ---
 
 ## Usage
