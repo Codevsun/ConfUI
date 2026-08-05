@@ -21,7 +21,7 @@
 Think of it like a file explorer for configs. No more scrolling through raw text — navigate, search, and edit with keyboard shortcuts.
 
 ```bash
-git clone https://github.com/Codevsun/ConfUI.git && cd confui && cargo install --path .
+curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
 ```
 
 ## Table of contents
@@ -40,6 +40,20 @@ git clone https://github.com/Codevsun/ConfUI.git && cd confui && cargo install -
 
 ## Install
 
+### Quick (prebuilt binary)
+
+```bash
+curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.ps1 | iex"
+```
+
+No Rust toolchain required — this downloads a prebuilt binary for your platform from the [latest release](https://github.com/Codevsun/ConfUI/releases/latest).
+
 ### From source
 
 Requires Rust 1.85+ (via [rustup.rs](https://rustup.rs)):
@@ -52,10 +66,8 @@ cargo install --path .
 
 This places the `confui` binary in `~/.cargo/bin/` — make sure that directory is on your `PATH`.
 
-> **Note:** this project has not yet published a tagged release or a crates.io
-> package, so a prebuilt-binary installer script and `cargo install confui`
-> aren't available yet — building from source above is the only supported
-> install path right now.
+> **Note:** this project isn't published on crates.io yet, so `cargo install confui`
+> isn't available — use the prebuilt-binary installer or build from source above.
 
 ---
 
