@@ -54,6 +54,43 @@ pub fn serialize_with_format(value: &Value, format: Format) -> color_eyre::Resul
     }
 }
 
+/// Per-file editing state that lets [`serialize_for_edit`] preserve
+/// comments/formatting for keys that haven't changed since the file was
+/// opened or last saved. Only TOML carries extra state today; JSON has no
+/// comments and `serde_yaml` re-serializes from scratch regardless.
+pub enum EditState {
+    Toml(toml_edit::DocumentMut),
+    Other,
+}
+
+/// Parse a config file's content, also returning state that
+/// [`serialize_for_edit`] can use to minimize formatting churn on save.
+pub fn parse_for_edit(path: &Path, content: &str) -> color_eyre::Result<(Value, EditState)> {
+    match Format::detect(path, content) {
+        Format::Toml => {
+            let (value, doc) = toml::parse_toml_for_edit(content)?;
+            Ok((value, EditState::Toml(doc)))
+        }
+        Format::Json => Ok((json::parse_json(content)?, EditState::Other)),
+        Format::Yaml => Ok((yaml::parse_yaml(content)?, EditState::Other)),
+    }
+}
+
+/// Serialize `value` back into text, using `state` (from [`parse_for_edit`])
+/// to preserve formatting where possible.
+pub fn serialize_for_edit(
+    path: &Path,
+    value: &Value,
+    state: &mut EditState,
+) -> color_eyre::Result<String> {
+    match (Format::detect(path, ""), state) {
+        (Format::Toml, EditState::Toml(doc)) => toml::serialize_toml_into(doc, value),
+        (Format::Toml, EditState::Other) => toml::serialize_toml(value),
+        (Format::Json, _) => json::serialize_json(value),
+        (Format::Yaml, _) => yaml::serialize_yaml(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

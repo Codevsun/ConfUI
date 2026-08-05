@@ -12,11 +12,109 @@ pub fn parse_toml(input: &str) -> color_eyre::Result<Value> {
     Ok(table_to_value(&*doc))
 }
 
-/// Serialize a `Value` tree into a TOML string.
+/// Serialize a `Value` tree into a TOML string from scratch.
+///
+/// This always produces a canonical re-serialization and does not preserve
+/// the original document's comments/formatting. Use [`parse_toml_for_edit`]
+/// and [`serialize_toml_into`] to keep formatting stable across an edit
+/// session.
 pub fn serialize_toml(value: &Value) -> color_eyre::Result<String> {
     let mut doc = DocumentMut::new();
     populate_table(&mut *doc, value);
     Ok(doc.to_string())
+}
+
+/// Parse a TOML string into a `Value` tree, also returning the editable
+/// source document so later saves can preserve untouched comments/formatting.
+pub fn parse_toml_for_edit(input: &str) -> color_eyre::Result<(Value, DocumentMut)> {
+    let doc: DocumentMut = input.parse()?;
+    let value = table_to_value(doc.as_table());
+    Ok((value, doc))
+}
+
+/// Serialize `value` into `doc` in place and return the resulting TOML text.
+///
+/// Keys whose value hasn't changed since `doc` was last parsed/synced are
+/// left completely untouched, so their comments and formatting survive.
+/// Keys with changed or new values are (re)written; nested objects recurse
+/// so only the sub-tree that actually changed loses its original formatting.
+pub fn serialize_toml_into(doc: &mut DocumentMut, value: &Value) -> color_eyre::Result<String> {
+    sync_table(doc.as_table_mut(), value);
+    Ok(doc.to_string())
+}
+
+/// Recursively reconcile `table` with `value`, preserving items that are
+/// unchanged and only rewriting the ones that differ.
+fn sync_table(table: &mut dyn TableLike, value: &Value) {
+    let map = match value {
+        Value::Object(map) => map,
+        // Root/table position no longer holds an object — fall back to a
+        // full rebuild (this shouldn't happen for well-formed edits).
+        _ => {
+            let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+            for k in &keys {
+                table.remove(k);
+            }
+            populate_table(table, value);
+            return;
+        }
+    };
+
+    // Drop keys that no longer exist in the new value.
+    let existing_keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for k in &existing_keys {
+        if !map.contains_key(k) {
+            table.remove(k);
+        }
+    }
+
+    enum Action {
+        Skip,
+        Recurse,
+        /// Update the value in place, keeping the existing `Item` (and thus
+        /// the key's own leading comment/decor) untouched.
+        UpdateLeaf,
+        /// Fully replace the item — used only for brand-new keys or
+        /// structural type changes, where there's no decor to preserve.
+        Replace,
+    }
+
+    for (key, val) in map {
+        let action = match table.get(key) {
+            Some(item) if item_to_value(item) == *val => Action::Skip,
+            Some(item) if matches!(val, Value::Object(_)) && item.is_table_like() => {
+                Action::Recurse
+            }
+            Some(Item::Value(_)) => Action::UpdateLeaf,
+            _ => Action::Replace,
+        };
+        match action {
+            Action::Skip => {}
+            Action::Recurse => {
+                if let Some(sub) = table.get_mut(key).and_then(|i| i.as_table_like_mut()) {
+                    sync_table(sub, val);
+                }
+            }
+            Action::UpdateLeaf => match leaf_to_toml_value(val) {
+                Some(mut new_tv) => {
+                    if let Some(Item::Value(old_tv)) = table.get(key) {
+                        *new_tv.decor_mut() = old_tv.decor().clone();
+                    }
+                    if let Some(item) = table.get_mut(key) {
+                        *item = Item::Value(new_tv);
+                    }
+                }
+                None => {
+                    // Not representable as an inline value (e.g. a nested
+                    // non-flat object, or null) — fall back to a full replace.
+                    set_item(table, key, val);
+                }
+            },
+            Action::Replace => {
+                set_item(table, key, val);
+            }
+        }
+    }
 }
 
 /// Convert a `TableLike` (document or table) into our `Value::Object`.
@@ -156,7 +254,11 @@ fn set_item(table: &mut dyn TableLike, key: &str, value: &Value) {
 
 /// Check if an array value should be serialized as an array of tables.
 fn is_array_of_tables(arr: &[Value]) -> bool {
-    arr.iter().any(|v| matches!(v, Value::Object(_)))
+    // `[[key]]` array-of-tables syntax requires every element to be a table.
+    // A mixed array (objects alongside scalars) must use a plain inline
+    // array instead — using array-of-tables here would silently drop every
+    // non-object element (see `set_item`'s array-of-tables branch).
+    !arr.is_empty() && arr.iter().all(|v| matches!(v, Value::Object(_)))
 }
 
 /// Check if an object is "simple" (all values are leaf nodes or arrays).
@@ -241,6 +343,23 @@ port = 8080"#;
         assert_eq!(
             val.get(&vec!["items".into(), 2usize.into()]),
             Some(&Value::int(3))
+        );
+    }
+
+    #[test]
+    fn serialize_mixed_type_array_keeps_all_elements() {
+        use indexmap::IndexMap;
+        let mut obj = IndexMap::new();
+        obj.insert("a".to_string(), Value::int(1));
+        let value = Value::Object(IndexMap::from([(
+            "items".to_string(),
+            Value::Array(vec![Value::Object(obj), Value::int(2), Value::string("x")]),
+        )]));
+        let output = serialize_toml(&value).unwrap();
+        let round_tripped = parse_toml(&output).unwrap();
+        assert_eq!(
+            round_tripped, value,
+            "mixed-type array must round-trip without dropping elements:\n{output}"
         );
     }
 

@@ -21,7 +21,7 @@
 Think of it like a file explorer for configs. No more scrolling through raw text — navigate, search, and edit with keyboard shortcuts.
 
 ```bash
-curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
+git clone https://github.com/Codevsun/ConfUI.git && cd confui && cargo install --path .
 ```
 
 ## Table of contents
@@ -40,27 +40,9 @@ curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-in
 
 ## Install
 
-### Quick (prebuilt binary)
-
-```bash
-curl -fsSL https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.sh | sh
-```
-
-Windows (PowerShell):
-
-```powershell
-irm https://github.com/Codevsun/ConfUI/releases/latest/download/confui-installer.ps1 | iex
-```
-
-No Rust toolchain required — this downloads a prebuilt binary for your platform.
-
-### From crates.io
-
-```bash
-cargo install confui
-```
-
 ### From source
+
+Requires Rust 1.85+ (via [rustup.rs](https://rustup.rs)):
 
 ```bash
 git clone https://github.com/Codevsun/ConfUI.git
@@ -68,7 +50,12 @@ cd confui
 cargo install --path .
 ```
 
-The `cargo install` paths place the `confui` binary in `~/.cargo/bin/` — make sure that directory is on your `PATH`. (Rust 1.85+, via [rustup.rs](https://rustup.rs), if building from source.)
+This places the `confui` binary in `~/.cargo/bin/` — make sure that directory is on your `PATH`.
+
+> **Note:** this project has not yet published a tagged release or a crates.io
+> package, so a prebuilt-binary installer script and `cargo install confui`
+> aren't available yet — building from source above is the only supported
+> install path right now.
 
 ---
 
@@ -162,7 +149,7 @@ The format is detected automatically from the file extension (`.toml`, `.json`, 
 - **Full undo/redo** — snapshot-based, up to 100 steps.
 - **Search** — search keys and values, jump between matches with `n`/`N`.
 - **Inline validation** — port ranges, URLs, IP addresses, number bounds, Rust editions — shown in the property panel.
-- **Preserves TOML formatting** — uses `toml_edit` so your comments and layout are safe.
+- **Preserves TOML formatting** — uses `toml_edit`; keys/sections you didn't touch keep their original comments and layout on save (only the specific values you change are rewritten).
 - **Safe saving** — atomic write: temp file → fsync → rename. A `.bak` backup is created first.
 - **6 theme presets** — Dark, Light, Catppuccin, Nord, Tokyo Night, Gruvbox. Cycle with `Ctrl+T`.
 - **Custom themes** — define your own colours in a TOML file.

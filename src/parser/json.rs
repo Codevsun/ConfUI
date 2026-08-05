@@ -10,7 +10,7 @@ pub fn parse_json(input: &str) -> color_eyre::Result<Value> {
 
 /// Serialize a `Value` tree into a pretty-printed JSON string.
 pub fn serialize_json(value: &Value) -> color_eyre::Result<String> {
-    let json_val = value_to_json(value);
+    let json_val = value_to_json(value)?;
     let s = serde_json::to_string_pretty(&json_val)?;
     Ok(s + "\n")
 }
@@ -43,28 +43,35 @@ fn json_to_value(jv: serde_json::Value) -> Value {
 }
 
 /// Convert our `Value` into a `serde_json::Value`.
-fn value_to_json(value: &Value) -> serde_json::Value {
-    match value {
+///
+/// Returns an error for NaN/infinite floats — JSON has no way to represent
+/// them, so silently substituting a number (e.g. `0.0`) would corrupt data.
+fn value_to_json(value: &Value) -> color_eyre::Result<serde_json::Value> {
+    Ok(match value {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::Int(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
         Value::Float(f) => {
-            if let Some(n) = serde_json::Number::from_f64(*f) {
-                serde_json::Value::Number(n)
-            } else {
-                serde_json::Value::Number(serde_json::Number::from_f64(0.0).unwrap())
-            }
+            let n = serde_json::Number::from_f64(*f).ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "Cannot save {f} to JSON: NaN/Infinity are not valid JSON numbers"
+                )
+            })?;
+            serde_json::Value::Number(n)
         }
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(value_to_json).collect()),
+        Value::Array(arr) => {
+            let items: color_eyre::Result<Vec<_>> = arr.iter().map(value_to_json).collect();
+            serde_json::Value::Array(items?)
+        }
         Value::Object(map) => {
             let mut m = serde_json::Map::new();
             for (k, v) in map {
-                m.insert(k.clone(), value_to_json(v));
+                m.insert(k.clone(), value_to_json(v)?);
             }
             serde_json::Value::Object(m)
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -78,6 +85,19 @@ mod tests {
         let val = parse_json(input).unwrap();
         assert_eq!(val.get(&vec!["name".into()]), Some(&Value::string("test")));
         assert_eq!(val.get(&vec!["count".into()]), Some(&Value::int(42)));
+    }
+
+    #[test]
+    fn serialize_nan_errors_instead_of_corrupting_data() {
+        let value = Value::Object(indexmap::IndexMap::from([(
+            "a".to_string(),
+            Value::float(f64::NAN),
+        )]));
+        let result = serialize_json(&value);
+        assert!(
+            result.is_err(),
+            "NaN cannot be represented in JSON and must error, not silently become 0.0"
+        );
     }
 
     #[test]

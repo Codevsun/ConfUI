@@ -69,6 +69,8 @@ pub struct App {
     pub plugins: PluginRegistry,
     /// The currently active plugin for the open file.
     pub active_plugin: Option<String>,
+    /// Format-specific state used to preserve formatting/comments on save.
+    pub edit_state: parser::EditState,
     /// Whether we are in search input mode.
     pub searching: bool,
     /// The current search query.
@@ -85,7 +87,7 @@ impl App {
         let content = std::fs::read_to_string(file_path)
             .map_err(|e| color_eyre::eyre::eyre!("Cannot read {}: {}", file_path.display(), e))?;
         let format = parser::Format::detect(file_path, &content);
-        let tree = parser::parse(file_path, &content)?;
+        let (tree, edit_state) = parser::parse_for_edit(file_path, &content)?;
 
         let mut expanded = Vec::new();
         // Root is automatically expanded
@@ -154,6 +156,7 @@ impl App {
             theme: &theme::DARK,
             plugins,
             active_plugin,
+            edit_state,
         })
     }
 
@@ -314,9 +317,10 @@ impl App {
             Value::Bool(b) => {
                 // Toggle boolean immediately
                 let new_val = Value::Bool(!b);
+                self.history.record(self.tree.clone());
                 if self.tree.set(&cursor_path, new_val).is_ok() {
                     self.modified = true;
-                    self.status = "Toggled bool — Ctrl+S to save".into();
+                    self.status = "Toggled bool — Ctrl+S to save  Ctrl+Z undo".into();
                 }
             }
             Value::Null => {
@@ -503,16 +507,25 @@ impl App {
         // Determine where to insert: we use the parent + append/insert logic
         let parent = self.tree.get(&parent_path).cloned();
         match parent {
-            Some(Value::Object(_)) => {
-                // Insert a new key in the object (same level as the cursor)
-                let new_key = "new_key";
+            Some(Value::Object(ref map)) => {
+                // Insert a new key in the object (same level as the cursor).
+                // Pick a key that doesn't already exist — otherwise pressing
+                // `i` twice on the same object would fail every time after
+                // the first "new_key".
+                let mut new_key = "new_key".to_string();
+                let mut n = 1;
+                while map.contains_key(&new_key) {
+                    n += 1;
+                    new_key = format!("new_key_{n}");
+                }
                 let insert_path = {
                     let mut p = parent_path.to_vec();
-                    p.push(PathSegment::Key(new_key.into()));
+                    p.push(PathSegment::Key(new_key.clone()));
                     p
                 };
-                self.history.record(self.tree.clone());
+                let snapshot = self.tree.clone();
                 if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                    self.history.record(snapshot);
                     self.modified = true;
                     // Expand the parent so the new key is visible
                     if !self.expanded.contains(&parent_path) {
@@ -531,8 +544,9 @@ impl App {
                     p.push(PathSegment::Index(insert_idx));
                     p
                 };
-                self.history.record(self.tree.clone());
+                let snapshot = self.tree.clone();
                 if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                    self.history.record(snapshot);
                     self.modified = true;
                     if !self.expanded.contains(&parent_path) {
                         self.expanded.push(parent_path.clone());
@@ -633,9 +647,13 @@ impl App {
         }
         let path = self.rename_path.clone();
         self.renaming = false;
-        self.history.record(self.tree.clone());
+        let snapshot = self.tree.clone();
         match self.tree.rename_key(&path, &new_key) {
             Ok(()) => {
+                // Only record history on success — otherwise a rejected
+                // rename (e.g. duplicate key) would push a no-op snapshot,
+                // requiring an extra Ctrl+Z to get past it.
+                self.history.record(snapshot);
                 self.modified = true;
                 self.status = format!("Renamed to '{}' — Ctrl+Z undo", new_key);
             }
@@ -673,7 +691,7 @@ impl App {
         let parent_path: TreePath = cursor_path[..cursor_path.len() - 1].to_vec();
         let last = cursor_path.last().unwrap();
 
-        self.history.record(self.tree.clone());
+        let snapshot = self.tree.clone();
         let result = match last {
             PathSegment::Key(k) => {
                 let new_key = format!("{}_copy", k);
@@ -689,6 +707,8 @@ impl App {
         };
         match result {
             Ok(label) => {
+                // Only record history on success (see commit_rename).
+                self.history.record(snapshot);
                 self.modified = true;
                 self.status = format!("Duplicated as {} — Ctrl+Z undo", label);
             }
@@ -729,12 +749,16 @@ impl App {
     }
 
     /// Paste a previously cut node at the current cursor position.
+    ///
+    /// `cut_node` already removes the value from the tree and stores it in
+    /// the clipboard, so pasting inserts that held value directly — it must
+    /// not try to move/delete from the (now stale) original path again.
     pub fn paste_node(&mut self) {
         if self.editing || self.renaming || self.confirming_delete {
             return;
         }
-        let (from_path, _value) = match &self.clipboard {
-            Some(pair) => pair,
+        let (from_path, value) = match &self.clipboard {
+            Some(pair) => pair.clone(),
             None => {
                 self.status = "Nothing to paste — use Ctrl+X to cut first".into();
                 return;
@@ -745,13 +769,36 @@ impl App {
             self.status = "Cannot paste at root".into();
             return;
         }
+        let parent_path: TreePath = cursor_path[..cursor_path.len() - 1].to_vec();
+        let parent = self.tree.get(&parent_path).cloned();
+
         self.history.record(self.tree.clone());
-        let result = self.tree.move_value(from_path, &cursor_path);
+        let result = match parent {
+            Some(Value::Object(map)) => {
+                let mut key = match from_path.last() {
+                    Some(PathSegment::Key(k)) => k.clone(),
+                    _ => "pasted".to_string(),
+                };
+                while map.contains_key(&key) {
+                    key = format!("{}_copy", key);
+                }
+                let mut p = parent_path.clone();
+                p.push(PathSegment::Key(key.clone()));
+                self.tree.insert(&p, value).map(|_| key)
+            }
+            Some(Value::Array(ref arr)) => {
+                let idx = arr.len();
+                let mut p = parent_path.clone();
+                p.push(PathSegment::Index(idx));
+                self.tree.insert(&p, value).map(|_| format!("[{}]", idx))
+            }
+            _ => Err(confui::core::TreeError::PathNotFound),
+        };
         match result {
-            Ok(()) => {
+            Ok(label) => {
                 self.clipboard = None;
                 self.modified = true;
-                self.status = "Moved — Ctrl+Z undo".into();
+                self.status = format!("Pasted as {} — Ctrl+Z undo", label);
             }
             Err(e) => {
                 self.status = format!("Paste error: {}", e);
@@ -943,7 +990,8 @@ impl App {
     pub fn save(&mut self) -> Result<()> {
         use std::io::Write;
 
-        let content = parser::serialize(&self.file_path, &self.tree)?;
+        let content =
+            parser::serialize_for_edit(&self.file_path, &self.tree, &mut self.edit_state)?;
 
         // Create backup (.bak)
         let backup_path = {
@@ -1356,6 +1404,7 @@ mod tests {
             theme: &theme::DARK,
             plugins: PluginRegistry::new(),
             active_plugin: None,
+            edit_state: parser::EditState::Other,
         }
     }
 
@@ -1674,6 +1723,88 @@ mod tests {
     }
 
     #[test]
+    fn save_preserves_toml_comments_on_untouched_keys() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("confui_test_save_comments");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("test.toml");
+        let original = "\
+# top-level comment
+count = 100  # inline comment
+
+[server]
+# server comment
+host = \"0.0.0.0\"
+";
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(original.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+
+        let mut app = App::new(&file_path).unwrap();
+        // Only touch "host"; "count" and its comments should be untouched.
+        app.tree
+            .set(
+                &vec!["server".into(), "host".into()],
+                Value::string("1.2.3.4"),
+            )
+            .unwrap();
+        app.modified = true;
+        app.save().unwrap();
+
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        assert!(
+            saved.contains("# top-level comment"),
+            "top-level comment lost:\n{saved}"
+        );
+        assert!(
+            saved.contains("count = 100  # inline comment"),
+            "inline comment on unchanged key lost:\n{saved}"
+        );
+        assert!(
+            saved.contains("# server comment"),
+            "table comment lost:\n{saved}"
+        );
+        assert!(saved.contains("1.2.3.4"), "edited value missing:\n{saved}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_preserves_untouched_toml_datetime_type() {
+        // TOML datetimes are represented as `Value::String` internally
+        // (there's no dedicated core::Value variant for them). A full
+        // rebuild-from-scratch save would always re-emit them as quoted
+        // strings, silently changing their type. As long as the datetime
+        // field itself isn't edited, the untouched-key fast path in
+        // `serialize_toml_into` must leave the original item (and its real
+        // TOML datetime type) alone.
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("confui_test_save_datetime");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("test.toml");
+        let original = "created = 2024-01-01T00:00:00Z\ncount = 1\n";
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(original.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+
+        let mut app = App::new(&file_path).unwrap();
+        // Edit an unrelated key; leave "created" untouched.
+        app.tree.set(&vec!["count".into()], Value::int(2)).unwrap();
+        app.modified = true;
+        app.save().unwrap();
+
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        assert!(
+            saved.contains("created = 2024-01-01T00:00:00Z"),
+            "untouched datetime should keep its real TOML type, not become a quoted string:\n{saved}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn modified_indicator_updates() {
         let mut app = make_app(test_tree());
         assert!(!app.modified);
@@ -1726,5 +1857,53 @@ mod tests {
         handle_key_event(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.editing);
         assert!(!app.modified);
+    }
+
+    #[test]
+    fn insert_node_twice_does_not_collide() {
+        let mut app = make_app(test_tree());
+        // Land cursor on "count" (a root-level key) so inserts target the root object.
+        let lines = app.compute_visible_lines();
+        let count_idx = lines.iter().position(|l| l.key == "count").unwrap();
+        app.cursor_index = count_idx;
+
+        app.insert_node();
+        assert!(app.status.contains("Inserted 'new_key'"), "{}", app.status);
+        assert!(app.tree.get(&vec!["new_key".into()]).is_some());
+
+        // Second insert at the same level must not collide with the first.
+        app.insert_node();
+        assert!(
+            app.status.contains("Inserted 'new_key_2'"),
+            "second insert should pick a non-colliding key, got: {}",
+            app.status
+        );
+        assert!(app.tree.get(&vec!["new_key".into()]).is_some());
+        assert!(app.tree.get(&vec!["new_key_2".into()]).is_some());
+    }
+
+    #[test]
+    fn cut_then_paste_reinserts_value() {
+        let mut app = make_app(test_tree());
+        // Cut "count" (top-level leaf)
+        let lines = app.compute_visible_lines();
+        let count_idx = lines.iter().position(|l| l.key == "count").unwrap();
+        app.cursor_index = count_idx;
+        app.cut_node();
+        assert!(app.tree.get(&vec!["count".into()]).is_none());
+        assert!(app.clipboard.is_some());
+
+        // Paste it as a sibling of "host" (inside "server")
+        let lines = app.compute_visible_lines();
+        let host_idx = lines.iter().position(|l| l.key == "host").unwrap();
+        app.cursor_index = host_idx;
+        app.paste_node();
+
+        assert!(app.clipboard.is_none(), "paste error: {}", app.status);
+        assert_eq!(
+            app.tree.get(&vec!["server".into(), "count".into()]),
+            Some(&Value::int(100)),
+            "pasting should reinsert the cut value under the target's parent, preserving its key"
+        );
     }
 }

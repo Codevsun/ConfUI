@@ -271,14 +271,18 @@ impl Value {
     /// Move a value from `from` path to `to` path.
     ///
     /// Both paths must exist (or for arrays, `to` may append at the end).
-    /// The source is removed first, then the value is inserted at the
-    /// destination.
+    /// The destination insert is attempted first (on a clone); the source is
+    /// only removed once that succeeds, so a failed move (e.g. the
+    /// destination key already exists) leaves the tree untouched instead of
+    /// silently dropping the source value.
     pub fn move_value(&mut self, from: &Path, to: &Path) -> Result<(), TreeError> {
         if from == to {
             return Err(TreeError::SourceEqualsTarget);
         }
-        let value = self.delete(from)?;
-        self.insert(to, value)
+        let value = self.get(from).cloned().ok_or(TreeError::PathNotFound)?;
+        self.insert(to, value)?;
+        self.delete(from)?;
+        Ok(())
     }
 
     // ── convenience constructors ──────────────────────────────────────
@@ -836,6 +840,11 @@ mod tests {
         let mut tree = sample_tree();
         let result = tree.move_value(&path!["server", "host"], &path!["server", "port"]);
         assert_eq!(result, Err(TreeError::KeyAlreadyExists("port".into())));
+        // The source must survive a failed move — no data loss.
+        assert_eq!(
+            tree.get(&path!["server", "host"]),
+            Some(&Value::string("0.0.0.0"))
+        );
     }
 
     // ── from impls ────────────────────────────────────────────────
