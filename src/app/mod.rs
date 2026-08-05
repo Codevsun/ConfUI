@@ -53,6 +53,10 @@ pub struct App {
     pub confirming_delete: bool,
     /// The path of the node pending delete confirmation.
     pub confirm_delete_path: TreePath,
+    /// Whether we're choosing a type for a new node (after pressing `i`).
+    pub inserting: bool,
+    /// The container (object/array) the new node will be inserted into.
+    pub insert_container_path: TreePath,
     /// Whether we're in rename mode (for object keys).
     pub renaming: bool,
     /// The path of the node being renamed.
@@ -144,6 +148,8 @@ impl App {
             edit_cursor: 0,
             confirming_delete: false,
             confirm_delete_path: TreePath::new(),
+            inserting: false,
+            insert_container_path: TreePath::new(),
             renaming: false,
             rename_path: TreePath::new(),
             rename_buffer: String::new(),
@@ -491,84 +497,105 @@ impl App {
 
     // ── structure editing ──────────────────────────────────────────
 
-    /// Insert a new key (in objects) or item (in arrays) at the current cursor position.
+    /// Begin inserting a new node: open the type picker.
+    ///
+    /// If the cursor is on a container (object/array — including the root),
+    /// the new node is inserted as a child of it. Otherwise it's inserted as
+    /// a sibling within the cursor's parent container.
     pub fn insert_node(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         let cursor_path = self.cursor_path();
-        if cursor_path.is_empty() {
-            // Cannot insert at root
-            self.status = "Cannot insert at root".into();
+        let container_path = match self.tree.get(&cursor_path) {
+            Some(Value::Object(_)) | Some(Value::Array(_)) => cursor_path,
+            _ if !cursor_path.is_empty() => cursor_path[..cursor_path.len() - 1].to_vec(),
+            _ => {
+                self.status = "Cannot insert here".into();
+                return;
+            }
+        };
+        match self.tree.get(&container_path) {
+            Some(Value::Object(_)) | Some(Value::Array(_)) => {
+                self.inserting = true;
+                self.insert_container_path = container_path;
+                self.status =
+                    "Insert: s string  n int  f float  b bool  a array  o object  Esc cancel"
+                        .into();
+            }
+            _ => {
+                self.status = "Cannot insert: not inside an object or array".into();
+            }
+        }
+    }
+
+    /// Finish an insert: place `value` as a new key/item inside
+    /// `insert_container_path`.
+    pub fn commit_insert(&mut self, value: Value) {
+        if !self.inserting {
             return;
         }
-        let parent_path: TreePath = cursor_path[..cursor_path.len() - 1].to_vec();
-
-        // Determine where to insert: we use the parent + append/insert logic
-        let parent = self.tree.get(&parent_path).cloned();
-        match parent {
-            Some(Value::Object(ref map)) => {
-                // Insert a new key in the object (same level as the cursor).
-                // Pick a key that doesn't already exist — otherwise pressing
-                // `i` twice on the same object would fail every time after
-                // the first "new_key".
+        self.inserting = false;
+        let container_path = self.insert_container_path.clone();
+        let type_name = value.type_name();
+        match self.tree.get(&container_path).cloned() {
+            Some(Value::Object(map)) => {
+                // Pick a key that doesn't already exist — otherwise
+                // inserting twice into the same object would collide.
                 let mut new_key = "new_key".to_string();
                 let mut n = 1;
                 while map.contains_key(&new_key) {
                     n += 1;
                     new_key = format!("new_key_{n}");
                 }
-                let insert_path = {
-                    let mut p = parent_path.to_vec();
-                    p.push(PathSegment::Key(new_key.clone()));
-                    p
-                };
+                let mut insert_path = container_path.clone();
+                insert_path.push(PathSegment::Key(new_key.clone()));
                 let snapshot = self.tree.clone();
-                if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                if self.tree.insert(&insert_path, value).is_ok() {
                     self.history.record(snapshot);
                     self.modified = true;
-                    // Expand the parent so the new key is visible
-                    if !self.expanded.contains(&parent_path) {
-                        self.expanded.push(parent_path.clone());
+                    // Expand the container so the new key is visible
+                    if !self.expanded.contains(&container_path) {
+                        self.expanded.push(container_path.clone());
                     }
-                    self.status = format!("Inserted '{}' — Ctrl+S save", new_key);
+                    self.status = format!("Inserted {type_name} '{new_key}' — Ctrl+S save");
                 } else {
                     self.status = "Could not insert new key".into();
                 }
             }
-            Some(Value::Array(ref arr)) => {
-                // Insert at the end of the array
+            Some(Value::Array(arr)) => {
                 let insert_idx = arr.len();
-                let insert_path = {
-                    let mut p = parent_path.to_vec();
-                    p.push(PathSegment::Index(insert_idx));
-                    p
-                };
+                let mut insert_path = container_path.clone();
+                insert_path.push(PathSegment::Index(insert_idx));
                 let snapshot = self.tree.clone();
-                if self.tree.insert(&insert_path, Value::string("")).is_ok() {
+                if self.tree.insert(&insert_path, value).is_ok() {
                     self.history.record(snapshot);
                     self.modified = true;
-                    if !self.expanded.contains(&parent_path) {
-                        self.expanded.push(parent_path.clone());
+                    if !self.expanded.contains(&container_path) {
+                        self.expanded.push(container_path.clone());
                     }
-                    self.status = format!("Inserted item [{}] — Ctrl+S save", insert_idx);
+                    self.status = format!("Inserted {type_name} item [{insert_idx}] — Ctrl+S save");
                 } else {
                     self.status = "Could not insert array item".into();
                 }
             }
-            Some(_) => {
-                // Cursor is on a leaf, parent is not a container
-                self.status = "Cannot insert: parent is not an object or array".into();
+            _ => {
+                self.status = "Could not insert: target no longer valid".into();
             }
-            None => {
-                self.status = "Cannot insert: path not found".into();
-            }
+        }
+    }
+
+    /// Cancel the pending insert type picker.
+    pub fn cancel_insert(&mut self) {
+        if self.inserting {
+            self.inserting = false;
+            self.status = "Insert cancelled".into();
         }
     }
 
     /// Initiate delete confirmation for the current node.
     pub fn delete_node(&mut self) {
-        if self.editing || self.renaming {
+        if self.editing || self.renaming || self.inserting {
             return;
         }
         let cursor_path = self.cursor_path();
@@ -613,7 +640,7 @@ impl App {
 
     /// Start renaming the current key (only valid for object keys).
     pub fn start_rename(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         let cursor_path = self.cursor_path();
@@ -673,7 +700,7 @@ impl App {
 
     /// Duplicate the current node.
     pub fn duplicate_node(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         let cursor_path = self.cursor_path();
@@ -720,7 +747,7 @@ impl App {
 
     /// Cut the current node (copy to clipboard and delete).
     pub fn cut_node(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         let cursor_path = self.cursor_path();
@@ -754,7 +781,7 @@ impl App {
     /// the clipboard, so pasting inserts that held value directly — it must
     /// not try to move/delete from the (now stale) original path again.
     pub fn paste_node(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         let (from_path, value) = match &self.clipboard {
@@ -819,7 +846,7 @@ impl App {
 
     /// Start search mode: open the search query input.
     pub fn start_search(&mut self) {
-        if self.editing || self.renaming || self.confirming_delete {
+        if self.editing || self.renaming || self.confirming_delete || self.inserting {
             return;
         }
         self.searching = true;
@@ -1216,6 +1243,18 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                 app.cancel_delete();
             }
         }
+    } else if app.inserting {
+        // ── insert type picker key handling ───────────────────────
+        match key.code {
+            KeyCode::Esc => app.cancel_insert(),
+            KeyCode::Char('s') => app.commit_insert(Value::string("")),
+            KeyCode::Char('n') => app.commit_insert(Value::int(0)),
+            KeyCode::Char('f') => app.commit_insert(Value::float(0.0)),
+            KeyCode::Char('b') => app.commit_insert(Value::bool(false)),
+            KeyCode::Char('a') => app.commit_insert(Value::array()),
+            KeyCode::Char('o') => app.commit_insert(Value::object()),
+            _ => {}
+        }
     } else if app.searching {
         // ── search mode key handling ─────────────────────────────
         match key.code {
@@ -1392,6 +1431,8 @@ mod tests {
             edit_cursor: 0,
             confirming_delete: false,
             confirm_delete_path: TreePath::new(),
+            inserting: false,
+            insert_container_path: TreePath::new(),
             renaming: false,
             rename_path: TreePath::new(),
             rename_buffer: String::new(),
@@ -1862,24 +1903,128 @@ host = \"0.0.0.0\"
     #[test]
     fn insert_node_twice_does_not_collide() {
         let mut app = make_app(test_tree());
-        // Land cursor on "count" (a root-level key) so inserts target the root object.
+        // Land cursor on "count" (a root-level leaf) so inserts target the root object.
         let lines = app.compute_visible_lines();
         let count_idx = lines.iter().position(|l| l.key == "count").unwrap();
         app.cursor_index = count_idx;
 
         app.insert_node();
-        assert!(app.status.contains("Inserted 'new_key'"), "{}", app.status);
-        assert!(app.tree.get(&vec!["new_key".into()]).is_some());
+        assert!(app.inserting);
+        app.commit_insert(Value::string(""));
+        assert!(
+            app.status.contains("Inserted string 'new_key'"),
+            "{}",
+            app.status
+        );
+        assert_eq!(
+            app.tree.get(&vec!["new_key".into()]),
+            Some(&Value::string(""))
+        );
 
         // Second insert at the same level must not collide with the first.
         app.insert_node();
+        app.commit_insert(Value::string(""));
         assert!(
-            app.status.contains("Inserted 'new_key_2'"),
+            app.status.contains("Inserted string 'new_key_2'"),
             "second insert should pick a non-colliding key, got: {}",
             app.status
         );
         assert!(app.tree.get(&vec!["new_key".into()]).is_some());
         assert!(app.tree.get(&vec!["new_key_2".into()]).is_some());
+    }
+
+    #[test]
+    fn insert_node_type_picker_can_be_cancelled() {
+        let mut app = make_app(test_tree());
+        let lines = app.compute_visible_lines();
+        let count_idx = lines.iter().position(|l| l.key == "count").unwrap();
+        app.cursor_index = count_idx;
+
+        app.insert_node();
+        assert!(app.inserting);
+        app.cancel_insert();
+        assert!(!app.inserting);
+        assert!(app.tree.get(&vec!["new_key".into()]).is_none());
+        assert!(!app.modified);
+    }
+
+    #[test]
+    fn insert_node_can_create_object_and_array() {
+        let mut app = make_app(test_tree());
+        let lines = app.compute_visible_lines();
+        let count_idx = lines.iter().position(|l| l.key == "count").unwrap();
+        app.cursor_index = count_idx;
+
+        app.insert_node();
+        app.commit_insert(Value::object());
+        assert_eq!(
+            app.tree.get(&vec!["new_key".into()]),
+            Some(&Value::object())
+        );
+
+        app.insert_node();
+        app.commit_insert(Value::array());
+        assert_eq!(
+            app.tree.get(&vec!["new_key_2".into()]),
+            Some(&Value::array())
+        );
+    }
+
+    #[test]
+    fn insert_node_on_container_row_inserts_as_child() {
+        let mut app = make_app(test_tree());
+        // Cursor directly on "server" (an object row), not one of its children.
+        let lines = app.compute_visible_lines();
+        let server_idx = lines.iter().position(|l| l.key == "server").unwrap();
+        app.cursor_index = server_idx;
+
+        app.insert_node();
+        app.commit_insert(Value::int(0));
+        assert_eq!(
+            app.tree.get(&vec!["server".into(), "new_key".into()]),
+            Some(&Value::int(0)),
+            "inserting while the cursor is on a container should add a child, not a root-level sibling"
+        );
+        assert!(app.tree.get(&vec!["new_key".into()]).is_none());
+    }
+
+    #[test]
+    fn insert_node_into_empty_object() {
+        use indexmap::IndexMap;
+        let mut app = make_app(Value::Object(IndexMap::from([(
+            "empty".to_string(),
+            Value::object(),
+        )])));
+        let lines = app.compute_visible_lines();
+        let empty_idx = lines.iter().position(|l| l.key == "empty").unwrap();
+        app.cursor_index = empty_idx;
+
+        app.insert_node();
+        assert!(
+            app.inserting,
+            "cursor on an empty object's own row must still allow inserting into it"
+        );
+        app.commit_insert(Value::bool(true));
+        assert_eq!(
+            app.tree.get(&vec!["empty".into(), "new_key".into()]),
+            Some(&Value::bool(true))
+        );
+    }
+
+    #[test]
+    fn insert_node_at_root() {
+        let mut app = make_app(test_tree());
+        // Cursor on the root line itself (index 0).
+        app.cursor_index = 0;
+        assert!(app.cursor_path().is_empty());
+
+        app.insert_node();
+        assert!(app.inserting);
+        app.commit_insert(Value::float(1.5));
+        assert_eq!(
+            app.tree.get(&vec!["new_key".into()]),
+            Some(&Value::float(1.5))
+        );
     }
 
     #[test]

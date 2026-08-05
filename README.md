@@ -114,12 +114,14 @@ The format is detected automatically from the file extension (`.toml`, `.json`, 
 
 | Key | Action |
 |---|---|
-| `i` | Insert a new key (in an object) or item (in an array) |
+| `i` | Insert a new key/item — prompts for a type (`s` string, `n` int, `f` float, `b` bool, `a` array, `o` object), `Esc` to cancel |
 | `d` | Delete the current node (press **twice** to confirm) |
 | `R` | Rename the current key (objects only) |
 | `D` | Duplicate the current node |
 | `Ctrl+X` | Cut the current node (copy to clipboard + remove) |
 | `Ctrl+P` | Paste from clipboard at the current position |
+
+If the cursor is on an object/array (including the root), `i` inserts a new child inside it; otherwise it inserts a sibling next to the cursor.
 
 ### Undo / Redo
 
